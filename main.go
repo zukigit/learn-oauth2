@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	goGithub "github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
 )
@@ -69,8 +70,32 @@ func authMiddleware(c *gin.Context) {
 }
 
 func profileHandler(c *gin.Context) {
+	token := c.GetString("access_token")
+
+	// Create GitHub client
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := goGithub.NewClient(tc)
+
+	// Get authenticated user
+	user, _, err := client.Users.Get(ctx, "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"access_token": c.GetString("access_token"),
+		"id":         user.GetID(),
+		"login":      user.GetLogin(),
+		"name":       user.GetName(),
+		"email":      user.GetEmail(),
+		"avatar_url": user.GetAvatarURL(),
+		"company":    user.GetCompany(),
+		"location":   user.GetLocation(),
+		"bio":        user.GetBio(),
 	})
 }
 
