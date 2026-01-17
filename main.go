@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,12 +12,12 @@ import (
 )
 
 var (
-	oauthConfig *oauth2.Config
+	oauthConfig      *oauth2.Config
+	oauthStateString string = "random-state-string"
 )
 
 func homeHandler(c *gin.Context) {
 	if c == nil {
-		fmt.Printf("c is nil")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Errorf("c is nil")})
 		return
 	}
@@ -27,25 +28,57 @@ func homeHandler(c *gin.Context) {
 }
 
 func loginHandler(c *gin.Context) {
-	url := oauthConfig.AuthCodeURL("random-state-string")
+	url := oauthConfig.AuthCodeURL(oauthStateString)
 	c.Redirect(http.StatusTemporaryRedirect, url)
 }
 
 func redirectHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"redirected": "true"})
+	state := c.Query("state")
+	if state != oauthStateString {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("invalid state: %s", state)})
+		return
+	}
+
+	code := c.Query("code")
+	token, err := oauthConfig.Exchange(context.Background(), code)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Errorf("oauthConfig.Exchange() failed, err: %s", err.Error())})
+		return
+	}
+
+	c.SetCookie("oauth_token", token.AccessToken, 3600, "/", "rocky10", false, true)
+	c.Redirect(http.StatusFound, "/profile")
+}
+
+func authMiddleware(c *gin.Context) {
+	token, err := c.Cookie("oauth_token")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if token == "" {
+		c.Redirect(http.StatusFound, "/")
+		c.Abort()
+
+		return
+	}
+
+	c.Set("access_token", token)
+	c.Next()
+}
+
+func profileHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"access_token": c.GetString("access_token"),
+	})
 }
 
 func main() {
-	clientId := os.Getenv("CLIENT_ID")
-	clientSecret := os.Getenv("CLIENT_SECRET")
-
-	fmt.Println("clientId", clientId)
-	fmt.Println("clientSecret", clientSecret)
-
 	oauthConfig = &oauth2.Config{
-		ClientID:     clientId,
-		ClientSecret: clientSecret,
-		RedirectURL:  os.Getenv("http://localhost:8080/auth/callback"),
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
+		RedirectURL:  os.Getenv("http://rocky10/:8080/auth/callback"),
 		Scopes:       []string{"user:email", "read:user"},
 		Endpoint:     github.Endpoint,
 	}
@@ -55,6 +88,7 @@ func main() {
 	gine_engine.GET("/", homeHandler)
 	gine_engine.GET("/auth/login", loginHandler)
 	gine_engine.GET("/auth/callback", redirectHandler)
+	gine_engine.GET("/profile", authMiddleware, profileHandler)
 
 	gine_engine.Run()
 }
